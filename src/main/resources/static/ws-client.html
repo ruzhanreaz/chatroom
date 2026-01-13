@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Chat</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        padding: 20px;
+        background: #f0f0f0;
+      }
+
+      #chat-container {
+        background: white;
+        max-width: 800px;
+        margin: 0 auto;
+        border: 1px solid #ccc;
+      }
+
+      #header {
+        background: #4caf50;
+        color: white;
+        padding: 15px;
+        display: flex;
+        justify-content: space-between;
+      }
+
+      #header h2 {
+        margin: 0;
+        font-size: 18px;
+      }
+
+      #status {
+        font-size: 13px;
+      }
+
+      #main-content {
+        display: flex;
+        height: 400px;
+      }
+
+      #users-panel {
+        width: 150px;
+        background: #fafafa;
+        border-right: 1px solid #ddd;
+        padding: 10px;
+        overflow-y: auto;
+      }
+
+      #users-panel h3 {
+        margin: 0 0 10px 0;
+        font-size: 13px;
+        color: #666;
+      }
+
+      .user-item {
+        padding: 5px;
+        margin-bottom: 3px;
+        background: white;
+        border: 1px solid #ddd;
+        font-size: 13px;
+      }
+
+      #messages {
+        flex: 1;
+        padding: 10px;
+        overflow-y: auto;
+        background: white;
+      }
+
+      .message {
+        margin-bottom: 10px;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .message.my-message {
+        align-items: flex-end;
+      }
+
+      .message.other-message {
+        align-items: flex-start;
+      }
+
+      .message-header {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+
+      .username {
+        font-weight: bold;
+        font-size: 12px;
+      }
+
+      .my-message .username {
+        color: #1976d2;
+      }
+
+      .other-message .username {
+        color: #4caf50;
+      }
+
+      .timestamp {
+        font-size: 11px;
+        color: #999;
+      }
+
+      .message-content {
+        margin-top: 3px;
+        padding: 8px 12px;
+        border-radius: 15px;
+        max-width: 70%;
+        word-wrap: break-word;
+      }
+
+      .my-message .message-content {
+        background: #1976d2;
+        color: white;
+      }
+
+      .other-message .message-content {
+        background: #f0f0f0;
+        color: black;
+      }
+
+      .system-message {
+        text-align: center;
+        color: #999;
+        font-style: italic;
+        font-size: 12px;
+        margin: 5px 0;
+      }
+
+      #input-area {
+        padding: 10px;
+        background: #fafafa;
+        border-top: 1px solid #ddd;
+      }
+
+      #join-form,
+      #message-form {
+        display: flex;
+        gap: 5px;
+      }
+
+      #message-form {
+        display: none;
+      }
+
+      input {
+        flex: 1;
+        padding: 8px;
+        border: 1px solid #ccc;
+        font-size: 14px;
+      }
+
+      button {
+        padding: 8px 15px;
+        background: #4caf50;
+        color: white;
+        border: none;
+        cursor: pointer;
+        font-size: 14px;
+      }
+
+      button:hover {
+        background: #45a049;
+      }
+
+      #leave-btn {
+        background: #f44336;
+      }
+
+      #leave-btn:hover {
+        background: #da190b;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="chat-container">
+      <div id="header">
+        <h2>Chat Room</h2>
+        <div id="status">Disconnected</div>
+      </div>
+
+      <div id="main-content">
+        <div id="users-panel">
+          <h3>Online</h3>
+          <div id="users-list"></div>
+        </div>
+
+        <div id="messages"></div>
+      </div>
+
+      <div id="input-area">
+        <div id="join-form">
+          <input id="username-input" type="text" placeholder="Your name" />
+          <button id="join-btn">Join</button>
+        </div>
+
+        <div id="message-form">
+          <input id="message-input" type="text" placeholder="Type message..." />
+          <button id="send-btn">Send</button>
+          <button id="leave-btn">Leave</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      let ws;
+      let currentUsername = "";
+      const messages = document.getElementById("messages");
+      const usersListEl = document.getElementById("users-list");
+      const statusEl = document.getElementById("status");
+      const joinForm = document.getElementById("join-form");
+      const messageForm = document.getElementById("message-form");
+      const usernameInput = document.getElementById("username-input");
+      const messageInput = document.getElementById("message-input");
+
+      function loadChatHistory() {
+        fetch("/api/messages")
+          .then((res) => res.json())
+          .then((data) => {
+            data.forEach((msg) => {
+              if (msg.type === "CHAT") {
+                appendMessage(
+                  msg.username,
+                  msg.content,
+                  msg.createdAt || msg.timestamp
+                );
+              } else {
+                appendSystemMessage(msg.content);
+              }
+            });
+          })
+          .catch((err) => console.error("Failed to load history:", err));
+      }
+
+      function connectWebSocket() {
+        const url =
+          (location.protocol === "https:" ? "wss://" : "ws://") +
+          location.host +
+          "/ws/chat";
+        ws = new WebSocket(url);
+
+        ws.onopen = () => {
+          statusEl.textContent = "Connected";
+          ws.send(
+            JSON.stringify({
+              type: "JOIN",
+              username: currentUsername,
+              content: "",
+            })
+          );
+        };
+
+        ws.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+
+          if (data.type === "CHAT") {
+            appendMessage(data.username, data.content, data.timestamp);
+          } else if (data.type === "JOIN" || data.type === "LEAVE") {
+            appendSystemMessage(data.content);
+          } else if (data.type === "USER_LIST") {
+            updateUsersList(data.users);
+          }
+        };
+
+        ws.onclose = () => {
+          statusEl.textContent = "Disconnected";
+        };
+      }
+
+      function appendMessage(username, content, timestamp) {
+        const messageDiv = document.createElement("div");
+        const isMyMessage = username === currentUsername;
+        messageDiv.className = isMyMessage
+          ? "message my-message"
+          : "message other-message";
+
+        const time = new Date(timestamp).toLocaleTimeString();
+
+        messageDiv.innerHTML = `
+        <div class="message-header">
+          <span class="username">${username}</span>
+          <span class="timestamp">${time}</span>
+        </div>
+        <div class="message-content">${content}</div>
+      `;
+
+        messages.appendChild(messageDiv);
+        messages.scrollTop = messages.scrollHeight;
+      }
+
+      function appendSystemMessage(content) {
+        const messageDiv = document.createElement("div");
+        messageDiv.className = "system-message";
+        messageDiv.textContent = content;
+        messages.appendChild(messageDiv);
+        messages.scrollTop = messages.scrollHeight;
+      }
+
+      function updateUsersList(users) {
+        usersListEl.innerHTML = "";
+        users.forEach((user) => {
+          const userDiv = document.createElement("div");
+          userDiv.className = "user-item";
+          userDiv.textContent = user;
+          usersListEl.appendChild(userDiv);
+        });
+      }
+
+      document.getElementById("join-btn").addEventListener("click", () => {
+        const username = usernameInput.value.trim();
+        if (!username) {
+          alert("Please enter a name");
+          return;
+        }
+
+        currentUsername = username;
+        loadChatHistory();
+        connectWebSocket();
+
+        joinForm.style.display = "none";
+        messageForm.style.display = "flex";
+        messageInput.focus();
+      });
+
+      document
+        .getElementById("send-btn")
+        .addEventListener("click", sendMessage);
+
+      messageInput.addEventListener("keypress", (e) => {
+        if (e.key === "Enter") {
+          sendMessage();
+        }
+      });
+
+      function sendMessage() {
+        const content = messageInput.value.trim();
+        if (!content || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+        ws.send(
+          JSON.stringify({
+            type: "CHAT",
+            username: currentUsername,
+            content: content,
+          })
+        );
+
+        messageInput.value = "";
+      }
+
+      document.getElementById("leave-btn").addEventListener("click", () => {
+        if (ws) {
+          ws.close();
+        }
+        joinForm.style.display = "flex";
+        messageForm.style.display = "none";
+        messages.innerHTML = "";
+        usersListEl.innerHTML = "";
+        currentUsername = "";
+      });
+    </script>
+  </body>
+</html>
